@@ -1,75 +1,54 @@
 using System;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
 using Xunit;
-using Moq;
-using NAudio.Wave;
 using AudioSynthApp;
 
-[Collection("NonParallelTests")]
-public class AudioSynthTests
+public class FpsLoopTests
 {
     [Fact]
-    public void Start_ShouldSetIsRunningToTrue()
+    public void FpsTest()
     {
-        var mockOutput = new Mock<IAudioOutput>();
-        using var synth = new AudioSynth(mockOutput.Object);
+        const int targetFps = 60;
+        const int testDurationMs = 5000;
+        var frameTimes = new double[targetFps * 5];
+        int frameCount = 0;
+        var stopwatch = new Stopwatch();
 
-        synth.Start();
-        Assert.True(synth.IsRunning);
-        synth.Stop();
-    }
+        var loop = new FpsBasedLoop(
+            callback: () =>
+            {
+                if (stopwatch.IsRunning && frameCount < frameTimes.Length)
+                {
+                    frameTimes[frameCount++] = stopwatch.Elapsed.TotalMilliseconds;
+                    stopwatch.Restart();
+                }
+            },
+            targetFps: targetFps
+        );
 
-    [Fact]
-    public void Stop_ShouldSetIsRunningToFalse()
-    {
-        var mockOutput = new Mock<IAudioOutput>();
-        using var synth = new AudioSynth(mockOutput.Object);
-        synth.Start();
+        stopwatch.Start();
+        loop.Start();
+        Thread.Sleep(testDurationMs);
+        loop.Stop();
 
-        synth.Stop();
-        Assert.False(synth.IsRunning);
-    }
+        var relevantFrames = frameTimes
+            .Skip(10)
+            .Where(t => t > 0)
+            .Take(frameCount - 10)
+            .ToArray();
 
-    [Fact]
-    public void SetFrequency_ShouldChangeFrequency()
-    {
-        var mockOutput = new Mock<IAudioOutput>();
-        using var synth = new AudioSynth(mockOutput.Object);
+        var fpsValues = relevantFrames.Select(t => 1000 / t).ToArray();
+        var minFps = fpsValues.Min();
+        var avgFps = fpsValues.Average();
+        var maxFps = fpsValues.Max();
 
-        synth.SetFrequency(600.0);
-        Assert.Equal(600.0, synth.CurrentFrequency);
-    }
+        Console.WriteLine($"fps stats {testDurationMs} ms:");
+        Console.WriteLine($"- average: {avgFps:F2}");
+        Console.WriteLine($"- min: {minFps:F2}");
+        Console.WriteLine($"- max: {maxFps:F2}");
 
-    [Fact]
-    public void GenerateAudioFrame_ShouldAddSamplesToBuffer()
-    {
-        var mockOutput = new Mock<IAudioOutput>();
-        using var synth = new AudioSynth(mockOutput.Object);
-        int initialBufferedSamples = synth.BufferedSamples;
-
-        synth.GenerateAudioFrame();
-        Assert.True(synth.BufferedSamples > initialBufferedSamples);
-    }
-
-    [Fact]
-    public void Constructor_ShouldInitializeWithDefaultFrequency()
-    {
-        var mockOutput = new Mock<IAudioOutput>();
-        using var synth = new AudioSynth(mockOutput.Object);
-
-        Assert.Equal(440.0, synth.CurrentFrequency);
-    }
-
-    [Fact]
-    public void Dispose_ShouldStopAndDisposeOutput()
-    {
-        var mockOutput = new Mock<IAudioOutput>();
-        var synth = new AudioSynth(mockOutput.Object);
-        synth.Start();
-
-        synth.Dispose();
-
-        mockOutput.Verify(x => x.Stop(), Times.Once);
-        mockOutput.Verify(x => x.Dispose(), Times.Once);
-        Assert.False(synth.IsRunning);
+        Assert.InRange(avgFps, targetFps - 5, targetFps + 5);
     }
 }
